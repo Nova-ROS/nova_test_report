@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Benchmarks - ROS2 Jazzy</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --nav-bg: #1a1a2e;
+    --nav-text: #e0e0e0;
+    --nav-hover: #16213e;
+    --nav-active: #0f3460;
+    --accent: #4fc3f7;
+    --bg: #f5f5f5;
+    --card-bg: #ffffff;
+    --text: #333;
+    --text-muted: #888;
+    --border: #ddd;
+    --success: #4caf50;
+    --warning: #ff9800;
+    --danger: #f44336;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  nav {
+    background: var(--nav-bg); color: var(--nav-text);
+    display: flex; align-items: center; padding: 0 24px;
+    height: 48px; position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  nav .brand { font-weight: 700; font-size: 16px; margin-right: 32px; color: var(--accent); white-space: nowrap; }
+  nav a {
+    color: var(--nav-text); text-decoration: none; padding: 12px 20px;
+    font-size: 14px; font-weight: 500; border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+  }
+  nav a:hover { background: var(--nav-hover); }
+  nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav .stats {
+    margin-left: auto; font-size: 13px; color: var(--text-muted);
+    display: flex; gap: 16px;
+  }
+  nav .stats span { white-space: nowrap; }
+  .container { display: flex; margin-top: 48px; height: calc(100vh - 48px); }
+  .sidebar {
+    width: 300px; min-width: 300px; background: var(--card-bg);
+    border-right: 1px solid var(--border); overflow-y: auto; padding: 12px 0;
+  }
+  .sidebar .pkg-group { border-bottom: 1px solid var(--border); }
+  .sidebar .pkg-header {
+    padding: 10px 16px; font-weight: 600; font-size: 13px;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+    cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar .pkg-header:hover { background: #f0f0f0; }
+  .sidebar .pkg-header .arrow { transition: transform 0.2s; font-size: 10px; }
+  .sidebar .pkg-header.collapsed .arrow { transform: rotate(-90deg); }
+  .sidebar .suite-list { overflow: hidden; }
+  .sidebar .suite-list.collapsed { display: none; }
+  .sidebar .suite-item {
+    padding: 8px 16px 8px 32px; font-size: 13px; cursor: pointer;
+    border-left: 3px solid transparent; transition: all 0.15s;
+  }
+  .sidebar .suite-item:hover { background: #e8f4fd; }
+  .sidebar .suite-item.active { background: #e3f2fd; border-left-color: var(--accent); font-weight: 500; }
+  .sidebar .suite-item .bench-count { color: var(--text-muted); font-size: 11px; margin-left: 4px; }
+  .main { flex: 1; overflow-y: auto; padding: 24px; }
+  .chart-card {
+    background: var(--card-bg); border-radius: 8px; padding: 20px;
+    margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  .chart-card h3 { font-size: 15px; margin-bottom: 12px; color: var(--text); }
+  .chart-container { position: relative; height: 300px; }
+  .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 60vh; color: var(--text-muted); font-size: 16px;
+  }
+  .metric-toggle {
+    display: inline-flex; border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--border); margin-bottom: 16px;
+  }
+  .metric-toggle button {
+    padding: 6px 16px; font-size: 13px; border: none;
+    background: var(--card-bg); cursor: pointer; transition: all 0.15s;
+  }
+  .metric-toggle button.active { background: var(--accent); color: #fff; }
+  .metric-toggle button:hover:not(.active) { background: #e0e0e0; }
+  @media (max-width: 768px) {
+    .sidebar { width: 240px; min-width: 240px; }
+  }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand">ROS2 Jazzy</div>
+  <a href="overview.html">Overview</a>
+  <a href="index.html">Tests</a>
+  <a href="benchmarks.html" class="active">Benchmarks</a>
+</nav>
+<div class="container">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main" id="main">
+    <div class="empty-state" id="empty">Select a benchmark suite from the sidebar</div>
+  </div>
+</div>
+<script>
+let benchHistory = [];
+let charts = [];
+
+async function loadData() {
+  try {
+    const resp = await fetch('bench_history.json');
+    const text = await resp.text();
+    benchHistory = text.trim().split('\n').filter(l => l).map(l => JSON.parse(l));
+  } catch(e) {
+    console.error('Failed to load bench_history.json:', e);
+    document.getElementById('empty').textContent = 'Failed to load benchmark history data';
+    return;
+  }
+  renderSidebar();
+}
+
+function getSuitesByPackage() {
+  const map = {};
+  for (const run of benchHistory) {
+    const pkg = run.package || 'unknown';
+    if (!map[pkg]) map[pkg] = {};
+    for (const b of run.benchmarks) {
+      const suite = b.suite || 'unknown';
+      if (!map[pkg][suite]) map[pkg][suite] = new Set();
+      map[pkg][suite].add(b.name);
+    }
+  }
+  // Convert sets to sorted arrays
+  for (const pkg in map) {
+    for (const suite in map[pkg]) {
+      map[pkg][suite] = [...map[pkg][suite]].sort();
+    }
+  }
+  return map;
+}
+
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const suitesByPkg = getSuitesByPackage();
+  let html = '';
+  for (const [pkg, suites] of Object.entries(suitesByPkg)) {
+    html += `<div class="pkg-group">`;
+    html += `<div class="pkg-header" onclick="togglePkg(this)"><span class="arrow">▼</span>${pkg}</div>`;
+    html += `<div class="suite-list">`;
+    for (const [suite, names] of Object.entries(suites)) {
+      html += `<div class="suite-item" onclick="selectSuite('${esc(pkg)}','${esc(suite)}')" data-pkg="${esc(pkg)}" data-suite="${esc(suite)}">`;
+      html += `${suite} <span class="bench-count">${names.length}</span></div>`;
+    }
+    html += `</div></div>`;
+  }
+  sidebar.innerHTML = html;
+}
+
+function esc(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+
+function togglePkg(el) {
+  el.classList.toggle('collapsed');
+  el.nextElementSibling.classList.toggle('collapsed');
+}
+
+function selectSuite(pkg, suite) {
+  // Update active state
+  document.querySelectorAll('.suite-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`.suite-item[data-suite="${suite}"]`)?.classList.add('active');
+
+  // Collect data for this suite across all runs
+  const timeData = [];  // { date, name, cpu_time, real_time, time_unit, heap_allocations }
+  for (const run of benchHistory) {
+    if (run.package !== pkg) continue;
+    for (const b of run.benchmarks) {
+      if (b.suite === suite) {
+        timeData.push({ date: run.date, ...b });
+      }
+    }
+  }
+
+  // Group by benchmark name
+  const byName = {};
+  for (const d of timeData) {
+    if (!byName[d.name]) byName[d.name] = [];
+    byName[d.name].push(d);
+  }
+
+  // Sort each group by date
+  for (const name in byName) {
+    byName[name].sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  renderCharts(suite, byName);
+}
+
+function autoUnit(values, baseUnit) {
+  if (!values.length) return { unit: baseUnit, divisor: 1 };
+  const avg = values.reduce((s, v) => s + v, 0) / values.length;
+  if (baseUnit === 'ns') {
+    if (avg >= 1e6) return { unit: 'ms', divisor: 1e6 };
+    if (avg >= 1e3) return { unit: 'μs', divisor: 1e3 };
+    return { unit: 'ns', divisor: 1 };
+  }
+  return { unit: baseUnit, divisor: 1 };
+}
+
+function renderCharts(suite, byName) {
+  const main = document.getElementById('main');
+  charts.forEach(c => c.destroy());
+  charts = [];
+
+  let html = `<h2 style="margin-bottom:20px">${suite}</h2>`;
+
+  for (const [name, entries] of Object.entries(byName)) {
+    const baseUnit = entries[0]?.time_unit || 'ns';
+    const cpuValues = entries.map(e => e.cpu_time).filter(v => v > 0);
+    const realValues = entries.map(e => e.real_time).filter(v => v > 0);
+    const allTimeValues = [...cpuValues, ...realValues];
+    const { unit, divisor } = autoUnit(allTimeValues, baseUnit);
+
+    const labels = entries.map(e => e.date.slice(0, 10));
+    const cpuData = entries.map(e => e.cpu_time / divisor);
+    const realData = entries.map(e => e.real_time / divisor);
+    const heapData = entries.map(e => e.heap_allocations);
+
+    html += `<div class="chart-card">`;
+    html += `<h3>${name}</h3>`;
+    html += `<div class="chart-container"><canvas id="chart-time-${cssId(name)}"></canvas></div>`;
+    if (heapData.some(v => v != null)) {
+      html += `<div class="chart-container" style="height:200px;margin-top:16px"><canvas id="chart-heap-${cssId(name)}"></canvas></div>`;
+    }
+    html += `</div>`;
+  }
+
+  main.innerHTML = html;
+
+  // Create charts after DOM update
+  requestAnimationFrame(() => {
+    for (const [name, entries] of Object.entries(byName)) {
+      const baseUnit = entries[0]?.time_unit || 'ns';
+      const cpuValues = entries.map(e => e.cpu_time).filter(v => v > 0);
+      const realValues = entries.map(e => e.real_time).filter(v => v > 0);
+      const allTimeValues = [...cpuValues, ...realValues];
+      const { unit, divisor } = autoUnit(allTimeValues, baseUnit);
+      const labels = entries.map(e => e.date.slice(0, 10));
+      const cpuData = entries.map(e => e.cpu_time / divisor);
+      const realData = entries.map(e => e.real_time / divisor);
+      const heapData = entries.map(e => e.heap_allocations);
+
+      const ctx1 = document.getElementById(`chart-time-${cssId(name)}`);
+      if (ctx1) {
+        charts.push(new Chart(ctx1, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: `CPU Time (${unit})`, data: cpuData, borderColor: '#2196f3', backgroundColor: 'rgba(33,150,243,0.1)', fill: true, tension: 0.3, pointRadius: 4 },
+              { label: `Real Time (${unit})`, data: realData, borderColor: '#ff9800', backgroundColor: 'rgba(255,152,0,0.1)', fill: true, tension: 0.3, pointRadius: 4 },
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'top', labels: { usePointStyle: true, padding: 16 } } },
+            scales: { y: { beginAtZero: true, title: { display: true, text: `Time (${unit})` } }, x: { title: { display: true, text: 'Date' } } }
+          }
+        }));
+      }
+
+      const ctx2 = document.getElementById(`chart-heap-${cssId(name)}`);
+      if (ctx2 && heapData.some(v => v != null)) {
+        charts.push(new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{ label: 'Heap Allocations', data: heapData, backgroundColor: 'rgba(156,39,176,0.6)', borderColor: '#9c27b0', borderWidth: 1 }]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'Allocations' } }, x: { title: { display: true, text: 'Date' } } }
+          }
+        }));
+      }
+    }
+  });
+}
+
+function cssId(name) {
+  return name.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+loadData();
+</script>
+</body>
+</html>

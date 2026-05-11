@@ -1,0 +1,1 @@
+{"stats":{"total":21065,"passed":15512,"skipped":5356,"failed":120,"retries":45,"broken":77},"status":"failed","newTests":[],"flakyTests":[],"retryTests":[],"name":"ROS2 Jazzy Overview","duration":33,"createdAt":1778387988000,"plugin":"Dashboard","meta":{"reportId":"f05eb401-448a-478c-94e1-2dd868ec9ac8","singleFile":true},"pluginId":"dashboard","pullRequestHref":"","jobHref":""}
